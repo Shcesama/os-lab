@@ -80,8 +80,10 @@ hook: ## Run a Frida hook against a running app: make hook PKG=com.example HOOK=
 	@test -n "$(PKG)" && test -n "$(HOOK)" || { echo "usage: make hook PKG=com.example HOOK=hooks/ssl-pinning-bypass.js"; exit 1; }
 	$(FRIDA) -U -f "$(PKG)" -l "$(HOOK)" --no-pause
 
+trace: export PKG
+trace: export GLOB
 trace: ## Trace functions with frida-trace into a JSON call map: make trace PKG=com.example [GLOB='*auth*']
-	python3 hooks/trace_runner.py --target "$(or $(PKG),com.testlab.vulnerable)" -i "$(or $(GLOB),*)" --out artifacts/traces/call-map.json --session-log artifacts/traces/trace-session.md
+	python3 hooks/trace_runner.py --out artifacts/traces/call-map.json --session-log artifacts/traces/trace-session.md
 
 report: ## Collect logs, device status and flows into artifacts/
 	bash scripts/report.sh
@@ -93,4 +95,4 @@ uninstall-service: ## Remove the systemd unit
 	sudo bash scripts/uninstall-service.sh
 
 clean: ## Remove all artifacts (keeps the directory)
-	find artifacts -mindepth 1 ! -name .gitkeep -delete
+	python3 orchestrator.py clean

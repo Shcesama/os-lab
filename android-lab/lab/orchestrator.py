@@ -231,25 +231,34 @@ def main():
         flow_parser = os.path.join(SCRIPTS_DIR, "mitm_flow_parser.py")
         subprocess.run([sys.executable, flow_parser, args.file])
     elif args.command == "trace":
-        tracer = os.path.join(SCRIPTS_DIR, "trace_runner.py")
-        cmd = [sys.executable, tracer, "--target", args.target, "--out", args.out, "--session-log", args.session_log]
-        for pat in args.include:
-            cmd.extend(["-i", pat])
-        if args.simulate:
-            cmd.append("--simulate")
-        subprocess.run(cmd, check=True)
+        if SCRIPTS_DIR not in sys.path:
+            sys.path.insert(0, SCRIPTS_DIR)
+        import trace_runner
 
+        trace_argv = ["--target", args.target, "--out", args.out, "--session-log", args.session_log]
+        for pat in args.include:
+            trace_argv.extend(["-i", pat])
+        if args.simulate:
+            trace_argv.append("--simulate")
+        rc = trace_runner.main(trace_argv)
+        if rc != 0:
+            sys.exit(rc)
 
     elif args.command == "clean":
-        if os.path.exists(ARTIFACTS_DIR):
-            for item in os.listdir(ARTIFACTS_DIR):
-                if item != ".gitkeep":
-                    p = os.path.join(ARTIFACTS_DIR, item)
-                    if os.path.isdir(p):
-                        shutil.rmtree(p)
-                    else:
-                        os.remove(p)
-            print("Artifacts cleared.")
+        if SCRIPTS_DIR not in sys.path:
+            sys.path.insert(0, SCRIPTS_DIR)
+        import trace_runner
+
+        with trace_runner.artifact_lock():
+            if os.path.exists(ARTIFACTS_DIR):
+                for item in os.listdir(ARTIFACTS_DIR):
+                    if item != ".gitkeep":
+                        p = os.path.join(ARTIFACTS_DIR, item)
+                        if os.path.isdir(p):
+                            shutil.rmtree(p)
+                        else:
+                            os.remove(p)
+                print("Artifacts cleared.")
     else:
         parser.print_help()
 

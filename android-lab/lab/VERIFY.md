@@ -44,11 +44,11 @@ Verified JSON call-map summary fields:
 - `schema_version`: `"1.0"`
 - `task_id`: `"PENT-06"`
 - `target`: `"com.testlab.vulnerable"`
-- `summary.discovered_count`: `7`
-- `summary.functions_called_count`: `7`
+- `summary.discovered_count`: `4`
+- `summary.functions_called_count`: `4`
 - `summary.total_calls`: `7`
-- `summary.unique_edges`: `6`
-- `summary.max_depth`: `3`
+- `summary.unique_edges`: `3`
+- `summary.max_depth`: `2`
 
 ## 3. Repository Content & Signing Verification
 

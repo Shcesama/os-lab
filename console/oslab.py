@@ -170,7 +170,11 @@ PRIVILEGED = {"setup", "service-install", "service-uninstall"}
 SECRET_PARTS = ("PASSWORD", "SECRET", "TOKEN", "API_KEY", "PRIVATE_KEY", "CREDENTIAL")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-SAFE_GLOB = re.compile(r"^[A-Za-z0-9_.*?!:\[\]+-]{1,128}$")
+SAFE_GLOB = re.compile(r"^[A-Za-z0-9_.*?!:\[\]+\- ]{1,160}$")
+FORBIDDEN_TRACE_TARGETS = frozenset({
+    "init", "systemd", "sshd", "launchd", "kernel_task",
+    "csrss.exe", "lsass.exe", "wininit.exe", "services.exe", "smss.exe",
+})
 SIZE = re.compile(r"^[1-9][0-9]{0,5}[MmGgTt]?$")
 
 
@@ -1155,7 +1159,9 @@ def plan(root: str, request: dict, host: dict | None = None) -> dict:
                         not isinstance(trace_target, str)
                         or not SAFE_NAME.match(trace_target)
                         or trace_target.startswith("-")
-                        or trace_target.lower() in ("init", "systemd", "sshd", "launchd", "0", "1")
+                        or ".." in trace_target
+                        or trace_target.lower() in FORBIDDEN_TRACE_TARGETS
+                        or (trace_target.isdigit() and int(trace_target) <= 1)
                     ):
                         raise PlanError("Invalid trace target")
                     args += ["--target", trace_target]
@@ -1163,6 +1169,8 @@ def plan(root: str, request: dict, host: dict | None = None) -> dict:
                 if trace_glob not in (None, ""):
                     if (
                         not isinstance(trace_glob, str)
+                        or not trace_glob.strip()
+                        or ".." in trace_glob
                         or not SAFE_GLOB.match(trace_glob)
                         or (trace_glob.startswith("-") and not trace_glob.startswith("-["))
                     ):

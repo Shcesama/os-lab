@@ -24,8 +24,12 @@ sys.modules.setdefault("trace_runner", _impl)
 
 from scripts.trace_runner import (  # noqa: E402,F401
     FORBIDDEN_TARGETS,
+    MAX_PARSED_CALLS,
+    MAX_RAW_OUTPUT_BYTES,
+    MAX_SNAPSHOTS_PER_FUNCTION,
     SAMPLE_LAB_TRACE_LOG,
     TraceScopeError,
+    artifact_lock,
     build_call_map,
     build_frida_trace_cmd,
     find_frida_trace,
@@ -35,6 +39,8 @@ from scripts.trace_runner import (  # noqa: E402,F401
     parse_arg_value,
     parse_args_string,
     parse_trace_output,
+    redact_call_map,
+    redact_trace_text,
     render_annotated_session_log,
     run_trace_session,
     validate_symbol_glob,
@@ -43,8 +49,12 @@ from scripts.trace_runner import (  # noqa: E402,F401
 
 __all__ = [
     "FORBIDDEN_TARGETS",
+    "MAX_PARSED_CALLS",
+    "MAX_RAW_OUTPUT_BYTES",
+    "MAX_SNAPSHOTS_PER_FUNCTION",
     "SAMPLE_LAB_TRACE_LOG",
     "TraceScopeError",
+    "artifact_lock",
     "build_call_map",
     "build_frida_trace_cmd",
     "find_frida_trace",
@@ -54,6 +64,8 @@ __all__ = [
     "parse_arg_value",
     "parse_args_string",
     "parse_trace_output",
+    "redact_call_map",
+    "redact_trace_text",
     "render_annotated_session_log",
     "run_trace_session",
     "validate_symbol_glob",

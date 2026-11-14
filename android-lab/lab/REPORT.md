@@ -38,9 +38,9 @@ Task **PENT-06** (`frida-trace Auto-Tracer & Call-Map Builder`, Teached `05.10`)
 - Objective-C method traces (`-[Class selector:arg] => retval`)
 
 The resulting JSON call map (`schema_version: "1.0"`, `task_id: "PENT-06"`) contains:
-- `summary`: `discovered_count`, `functions_called_count`, `total_calls`, `unique_edges`, `threads_observed`, `max_depth`
+- `summary`: `discovered_count`, `functions_called_count`, `total_calls`, `unique_edges`, `threads_observed`, `max_depth`, `uncalled_functions`, `entry_points`, `truncated`
 - `discovered_functions`: per-symbol metadata (`symbol`, `module`, `qualified_name`, `handler_path`, `status`, `call_count`)
-- `functions`: per-function aggregated statistics, observed `arg_Snapshots`, `return_values`, `callers`, and `callees`
+- `functions`: per-function aggregated statistics, observed `arg_snapshots`, `return_values`, `callers`, and `callees`
 - `call_sequence`: chronological call list with `call_id`, `parent_call_id`, `caller`, `children_call_ids`, `depth`, `thread_id`, `args` snapshots (`index`, `name`, `value`, `type`, `raw`, optional `annotation`), `retval`, and `duration_ms`
 - `call_graph`: directed `caller -> callee` edges with call counts
 
