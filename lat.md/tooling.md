@@ -6,8 +6,12 @@ test suite, contribution flow and the project's security/licensing stance.
 ## Local test runner
 
 The local runner complements enabled browser/content and Linux/macOS package
-workflows. Windows review builds do not imply permission to publish without
-Authenticode; its workflow requires SignPath or explicit unsigned-release approval.
+workflows. Windows tag builds publish unsigned until SignPath credentials are
+configured and then sign automatically; pull-request builds never publish.
+
+The release workflows report their outcome to Telegram when the
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` repository secrets are set, and stay
+silent without them (see [app/RELEASE_CI.md](../app/RELEASE_CI.md)).
 
 [[scripts/run-tests.sh]] is the CI replacement. It prepares a Python
 environment (a `.venv-test` unless `--no-venv`), runs the pytest suite in

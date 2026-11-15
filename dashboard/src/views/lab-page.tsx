@@ -16,6 +16,7 @@ import {
   PulseIcon,
   ShieldWarningIcon,
   StopIcon,
+  TerminalIcon,
   WarningCircleIcon,
   WrenchIcon,
   XCircleIcon
@@ -48,7 +49,8 @@ const REFERENCE: Record<LabId, { check: string; setup: string; where: string }> 
   linux: { check: "./labctl linux status", setup: "./labctl linux profile use development\n./labctl linux start --wait", where: "linux-lab" },
   ios: { check: "./labctl ios status", setup: "./labctl ios profile use development\n./labctl ios start --wait", where: "ios-lab" },
   source: { check: "./labctl source doctor", setup: "./labctl source setup", where: "source-lab" },
-  macos: { check: "make -C ios-lab mac-app-doctor", setup: "make -C ios-lab mac-appium mac-app-smoke", where: "ios-lab/mac" }
+  macos: { check: "make -C ios-lab mac-app-doctor", setup: "make -C ios-lab mac-appium mac-app-smoke", where: "ios-lab/mac" },
+  web: { check: "./labctl web status", setup: "./labctl web setup", where: "web-lab" }
 };
 
 const ACTION_GROUPS: { title: string; ids: string[] }[] = [
@@ -140,6 +142,9 @@ function PlanPanel({
   onRun: () => void;
   onCancel: () => void;
 }) {
+  // The command and its effects stay one click away instead of dominating the
+  // card; the confirm sentence and the buttons always stay visible.
+  const [debug, setDebug] = useState(false);
   return (
     <section id="plan" className="iux-card gap-4 border-[#f36c21]/50 py-5">
       <div className="flex flex-wrap items-start gap-3 px-5">
@@ -156,6 +161,9 @@ function PlanPanel({
           <div className="flex gap-2">
             {plan.privileged ? <Badge tone="warning">Administrator</Badge> : null}
             <Badge>{plan.provider}</Badge>
+            <IconButton label={debug ? "Hide details" : "Show details"} onClick={() => setDebug((d) => !d)}>
+              <TerminalIcon size={14} />
+            </IconButton>
           </div>
         ) : null}
       </div>
@@ -163,13 +171,17 @@ function PlanPanel({
         {error ? <Status value={{ ok: false, text: error }} /> : null}
         {plan ? (
           <>
-            <pre className="overflow-x-auto rounded-lg border border-(--iux-border) bg-(--iux-muted) px-4 py-3 font-mono text-xs">{plan.display || "(run manually)"}</pre>
-            <ul className="list-disc space-y-1 pl-5 text-sm">
-              {plan.effects.map((e) => (
-                <li key={e}>{e}</li>
-              ))}
-              <li>Timeout: {Math.round(plan.timeoutSec / 60) || 1} min</li>
-            </ul>
+            {debug ? (
+              <>
+                <pre className="overflow-x-auto rounded-lg border border-(--iux-border) bg-(--iux-muted) px-4 py-3 font-mono text-xs">{plan.display || "(run manually)"}</pre>
+                <ul className="list-disc space-y-1 pl-5 text-sm">
+                  {plan.effects.map((e) => (
+                    <li key={e}>{e}</li>
+                  ))}
+                  <li>Timeout: {Math.round(plan.timeoutSec / 60) || 1} min</li>
+                </ul>
+              </>
+            ) : null}
             {plan.setup ? (
               <div className="rounded-xl border border-dashed border-(--iux-border) p-4 text-sm">
                 <h3 className="mb-2 font-semibold">Dependencies this installs or checks</h3>
@@ -224,10 +236,15 @@ function JobPanel({ jobs, selected, onSelect }: { jobs: LabJob[]; selected: stri
   const detail = usePoll(() => (id ? api.job(id) : Promise.resolve(null)), current?.state === "running" ? 1500 : 0, [id, current?.state]);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  // Compact by default: a running job shows only progress, a finished one just
+  // its status; the output opens on failure or through the details toggle.
+  const [debug, setDebug] = useState(false);
+  const failed = current?.state === "failed" || current?.state === "cancelled";
   if (!jobs.length) return <Empty>No jobs for this lab yet. Preview an action above to start one.</Empty>;
   const rawLogs = detail.data?.id === id ? detail.data.logs ?? [] : [];
   const progress = readProgress(rawLogs);
   const logs = rawLogs.filter((line) => !PROGRESS.test(line.trim()));
+  const showOutput = debug || failed;
   return (
     <div className="iux-card gap-4 p-5" aria-busy={current?.state === "running"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -237,10 +254,15 @@ function JobPanel({ jobs, selected, onSelect }: { jobs: LabJob[]; selected: stri
             Started {ago(current?.startedAt)}{current?.exitCode != null ? ` · exit ${current.exitCode}` : ""}
           </p>
         </div>
-        <Badge tone={current?.state === "succeeded" ? "success" : current?.state === "running" ? "warning" : "danger"}>
-          {current?.state === "running" ? <CircleNotchIcon size={13} className="mr-1 inline animate-spin" /> : null}
-          {current?.state ?? "unknown"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <IconButton label={debug ? "Hide details" : "Show details"} onClick={() => setDebug((d) => !d)}>
+            <TerminalIcon size={14} />
+          </IconButton>
+          <Badge tone={current?.state === "succeeded" ? "success" : current?.state === "running" ? "warning" : "danger"}>
+            {current?.state === "running" ? <CircleNotchIcon size={13} className="mr-1 inline animate-spin" /> : null}
+            {current?.state ?? "unknown"}
+          </Badge>
+        </div>
       </div>
       {current?.state === "running" ? (
         <div role="status" className="space-y-1.5 text-xs text-(--iux-muted-foreground)">
@@ -293,11 +315,13 @@ function JobPanel({ jobs, selected, onSelect }: { jobs: LabJob[]; selected: stri
           </button>
         ) : null}
       </div>
-      <div>
-        <p className="mb-2 text-xs font-medium text-(--iux-muted-foreground)">Output · {current?.lines ?? 0} lines</p>
-        <pre className="max-h-80 overflow-auto rounded-lg border border-(--iux-border) bg-(--iux-muted) p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">{logs.length ? logs.join("\n") : current?.state === "running" ? "Waiting for output…" : "No output."}</pre>
-        {current?.truncated ? <p className="mt-1 text-xs text-(--iux-muted-foreground)">Earlier output was trimmed.</p> : null}
-      </div>
+      {showOutput ? (
+        <div>
+          <p className="mb-2 text-xs font-medium text-(--iux-muted-foreground)">Output · {current?.lines ?? 0} lines</p>
+          <pre className="max-h-80 overflow-auto rounded-lg border border-(--iux-border) bg-(--iux-muted) p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">{logs.length ? logs.join("\n") : current?.state === "running" ? "Waiting for output…" : "No output."}</pre>
+          {current?.truncated ? <p className="mt-1 text-xs text-(--iux-muted-foreground)">Earlier output was trimmed.</p> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

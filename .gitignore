@@ -56,9 +56,16 @@ secrets/*
 !secrets/README.md
 app/out/
 app/src-tauri/resources/tools/uv-*
+# CLW-06/08: generated widget build products and Xcode project
+app/widget/build/
+app/widget/build-gen/
+app/widget/OSLabWidgets.xcodeproj/
 app/**/*.p8
 app/**/*.p12
 app/**/*.pfx
 
 # Built content pack (scripts/build-content.py)
 dist-content/
+
+# Web Lab engine build artifacts (web-lab/browser)
+web-lab/browser/target/

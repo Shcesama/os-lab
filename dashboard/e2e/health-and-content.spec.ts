@@ -28,7 +28,7 @@ async function mockApi(page: Page, os: "macos" | "windows" | "linux" = "macos", 
         os, osPretty: os === "macos" ? "macOS" : os === "windows" ? "Windows" : "Linux", arch: "x86_64",
         hostname: "test-host", cpus: 8, memory: 16 * 1024 ** 3, disk: { free: 100 * 1024 ** 3, total: 500 * 1024 ** 3 },
         kvm: { present: os === "linux", usable: os === "linux" }, wsl: { guest: false, distributions: os === "windows" ? ["Ubuntu"] : [] },
-        runtime: null, xcode: os === "macos" ? { installed: true, iosRuntime: true, iosDevice: true } : null,
+        runtime: null, xcode: os === "macos" ? { installed: true, iosRuntime: true, iosDevice: true, developerDir: "/Volumes/Apps/Applications/Xcode.app/Contents/Developer", xcodeApp: "/Volumes/Apps/Applications/Xcode.app" } : null,
         python: "3.12", root: "/tmp/os-lab", tools: [], providers: []
       },
       labs: (os === "macos" ? labs : labs.map((lab) => lab.id === "source" ? lab : ({ ...lab,
@@ -52,6 +52,11 @@ async function mockApi(page: Page, os: "macos" | "windows" | "linux" = "macos", 
     else if (path === "/api/apks") body = { apks: [] };
     else if (path === "/api/hooks") body = { hooks: [] };
     else if (path === "/api/devices") body = { devices: "List of devices attached\n" };
+    else if (path === "/api/labs/ios/devices") body = { available: false, reason: "The device tooling is unavailable in this mock.", devices: [] };
+    else if (path === "/api/cleanup/volumes") body = {
+      platform: "macos", threshold: 0.9, homeVolume: "/", warnings: [], error: null,
+      volumes: [{ mountPoint: "/", name: "Macintosh HD", device: "/dev/disk1", filesystem: "apfs", kind: "root", totalBytes: 500 * 1024 ** 3, freeBytes: 100 * 1024 ** 3, usedBytes: 400 * 1024 ** 3, usage: 0.8, purgeableBytes: null, isHome: true, pressure: "ok", error: null }]
+    };
     else if (path === "/api/jobs") body = { jobs: [] };
     else if (path === "/api/logs") body = { logs: [] };
     await route.fulfill({ json: body });
@@ -144,6 +149,98 @@ test("a lab that is missing requirements hides its runtime sections until they a
   await expect(page.getByRole("button", { name: "Attach simulator" })).toBeVisible();
 });
 
+test("the simulator drawer lists real devices and skips the low-disk nudge when the disk is fine", async ({ page }) => {
+  await mockApi(page, "macos");
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
+    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Shutdown" }], booted: []
+  } }));
+  await page.route("**/api/labs/ios/devices", (route) => route.fulfill({ json: {
+    available: true, reason: null,
+    devices: [{ udid: "00008101-XYZ", name: "iPhone 15", osVersion: "17.4", state: "connected",
+                paired: true, transport: "localNetwork", lastSeen: "2026-11-15T09:26:00.000Z" }]
+  } }));
+  await page.goto("/labs/ios/");
+  await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  // The Xcode line names the real install location, not an assumed path.
+  await expect(page.getByText("/Volumes/Apps/Applications/Xcode.app", { exact: true })).toBeVisible();
+  // Real devices list with their connection state; the nudge stays hidden on a healthy disk.
+  await expect(page.getByRole("heading", { name: "Real devices" })).toBeVisible();
+  await expect(page.getByText("iPhone 15")).toBeVisible();
+  await expect(page.getByText("connected", { exact: true })).toBeVisible();
+  await expect(page.getByText("System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.")).toHaveCount(0);
+});
+
+test("the resource watchdog opens the alert and can stop all simulators", async ({ page }) => {
+  await mockApi(page, "macos");
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
+    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }], booted: []
+  } }));
+  await page.route("**/api/labs/ios/resources", (route) => route.fulfill({ json: {
+    available: true, reason: null,
+    cpu: { percent: 40.0, warn: 85, critical: 95 },
+    memory: { totalBytes: 16 * 1024 ** 3, usedBytes: Math.round(15.5 * 1024 ** 3), percent: 96.9, warn: 85, critical: 92 },
+    simulator: { running: true, cpuPercent: 55.0, rssBytes: 3 * 1024 ** 3 }
+  } }));
+  await page.route("**/api/labs/plan", (route) => route.fulfill({ json: {
+    plan: { id: "p1", lab: "ios", action: "stop", display: "bash stop", effects: [], privileged: false, provider: "native-macos", timeoutSec: 300, runnable: true },
+    token: "tok-1"
+  } }));
+  await page.route("**/api/labs/start", (route) => route.fulfill({ json: { id: "j1", kind: "run", state: "running", request: {}, progress: null, result: null, error: null } }));
+  await page.goto("/labs/ios/");
+  await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  // Two critical polls open the alert; the meters show the pressure first.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("System resources are running low")).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText("15.5 GiB / 16.0 GiB")).toBeVisible();
+  await dialog.getByRole("button", { name: "Stop all simulators" }).click();
+  await expect(page.getByText("Simulators stopped.")).toBeVisible();
+  // The drawer itself is role=dialog; assert the alert's own content is gone.
+  await expect(page.getByText("System resources are running low")).toHaveCount(0);
+});
+
+test("the armed auto-stop fires without the alert", async ({ page }) => {
+  await mockApi(page, "macos");
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
+    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }], booted: []
+  } }));
+  await page.route("**/api/labs/ios/resources", (route) => route.fulfill({ json: {
+    available: true, reason: null,
+    cpu: { percent: 30.0, warn: 85, critical: 95 },
+    memory: { totalBytes: 16 * 1024 ** 3, usedBytes: Math.round(15.6 * 1024 ** 3), percent: 97.5, warn: 85, critical: 92 },
+    simulator: { running: true, cpuPercent: 70.0, rssBytes: 3 * 1024 ** 3 }
+  } }));
+  await page.route("**/api/labs/plan", (route) => route.fulfill({ json: {
+    plan: { id: "p1", lab: "ios", action: "stop", display: "bash stop", effects: [], privileged: false, provider: "native-macos", timeoutSec: 300, runnable: true },
+    token: "tok-1"
+  } }));
+  await page.route("**/api/labs/start", (route) => route.fulfill({ json: { id: "j1", kind: "run", state: "running", request: {}, progress: null, result: null, error: null } }));
+  await page.goto("/labs/ios/");
+  await page.evaluate(() => window.localStorage.setItem("oslab.ios.autostop", "1"));
+  await page.reload();
+  await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  await expect(page.getByText("Simulators were stopped automatically to free memory and CPU.")).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText("System resources are running low")).toHaveCount(0);
+});
+
+test("the low-disk nudge offers the relocation tab when the home volume is under pressure", async ({ page }) => {
+  await mockApi(page, "macos");
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
+    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Shutdown" }], booted: []
+  } }));
+  await page.route("**/api/cleanup/volumes", (route) => route.fulfill({ json: {
+    platform: "macos", threshold: 0.9, homeVolume: "/", warnings: ["Volume / is running low on free space."], error: null,
+    volumes: [{ mountPoint: "/", name: "Macintosh HD", device: "/dev/disk1", filesystem: "apfs", kind: "root", totalBytes: 500 * 1024 ** 3, freeBytes: 8 * 1024 ** 3, usedBytes: 492 * 1024 ** 3, usage: 0.98, purgeableBytes: null, isHome: true, pressure: "warning", error: null }]
+  } }));
+  await page.goto("/labs/ios/");
+  await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  await expect(page.getByText("System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Relocation" })).toBeVisible();
+});
+
 test("setup is offered only when a required dependency is missing", async ({ page }) => {
   const setup = { id: "setup", label: "Setup", description: "Install prerequisites", privileged: false };
   const found = { id: "runtime", label: "Container runtime", found: true, required: true, hint: "" };
@@ -213,6 +310,7 @@ test("every local page type hydrates without a browser error", async ({ page }) 
     "/", "/jobs/", "/contribute/", "/feedback/", "/content/", "/health/", "/legal/",
     "/legal/terms/", "/legal/acceptable-use/", "/legal/privacy/", "/legal/third-party/",
     "/labs/android/", "/labs/ios/", "/labs/windows/", "/labs/linux/", "/labs/macos/",
+    "/labs/web/", "/web-lab/",
     "/android/", "/android/providers/", "/android/workflows/", "/android/console/",
     "/android/analytics/", "/android/sitemap/", "/firewall/"
   ]) {

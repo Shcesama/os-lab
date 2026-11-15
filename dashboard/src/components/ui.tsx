@@ -155,15 +155,17 @@ export function keepModalFocus(event: KeyboardEvent<HTMLDialogElement>) {
 }
 
 /** A small square icon button with a tooltip: toggles panels and modals like Advanced settings. */
-export function IconButton({ label, onClick, className, children }: { label: string; onClick: () => void; className?: string; children: ReactNode }) {
+export function IconButton({ label, onClick, disabled, className, children }: { label: string; onClick: () => void; disabled?: boolean; className?: string; children: ReactNode }) {
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
-      onClick={onClick}
+      disabled={disabled}
+      onClick={disabled ? undefined : onClick}
       className={
         "iux-touch-target flex size-7 items-center justify-center rounded-md border border-(--iux-border)/80 text-(--iux-muted-foreground) transition-colors hover:bg-(--iux-muted) hover:text-(--iux-foreground)" +
+        (disabled ? " opacity-50 cursor-not-allowed" : "") +
         (className ? ` ${className}` : "")
       }
     >
