@@ -19,7 +19,7 @@ const content = {
   checkedAt: Date.now() / 1000, offline: false, source: "bundled", updateAvailable: true
 };
 
-async function mockApi(page: Page, os: "macos" | "windows" | "linux" = "macos", labPatch: Record<string, Partial<LabStatus>> = {}) {
+async function mockApi(page: Page, os: "macos" | "windows" | "linux" = "macos", labPatch: Record<string, Partial<LabStatus>> = {}, contentOffer = false) {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let body: unknown = {};
@@ -46,7 +46,7 @@ async function mockApi(page: Page, os: "macos" | "windows" | "linux" = "macos", 
     };
     else if (/^\/api\/labs\/[a-z]+\/config$/.test(path)) body = { lab: path.split("/")[3], path: "config.env", exists: true, fields: [], profiles: [], backups: [], endpoints: [{ label: "Appium", address: "http://127.0.0.1:4723/" }] };
     else if (/^\/api\/labs\/[a-z]+\/monitor$/.test(path)) body = { lab: path.split("/")[3], state: "stopped", containers: [] };
-    else if (path === "/api/content/status" || path === "/api/content/check") body = content;
+    else if (path === "/api/content/status" || path === "/api/content/check") body = contentOffer ? content : { ...content, latest: null, updateAvailable: false };
     else if (path === "/api/content/update") body = { ...content, installed: true, version: "content-149", sequence: 149, updateAvailable: false };
     else if (path === "/api/reports") body = { reports: [] };
     else if (path === "/api/apks") body = { apks: [] };
@@ -64,8 +64,9 @@ async function mockApi(page: Page, os: "macos" | "windows" | "linux" = "macos", 
 }
 
 test("content card checks and installs while keeping advanced options available", async ({ page }) => {
-  await mockApi(page);
+  await mockApi(page, "macos", {}, true);
   await page.goto("/");
+  await page.getByRole("dialog", { name: "Updates available" }).getByRole("button", { name: "Later", exact: true }).click();
   const card = page.locator("#content");
   await expect(card).toBeVisible();
   await expect(card.getByText("A newer content pack is available.").first()).toBeVisible();
@@ -76,7 +77,7 @@ test("content card checks and installs while keeping advanced options available"
 });
 
 test("Turkish page renders the content card without layout overflow", async ({ page }) => {
-  await mockApi(page);
+  await mockApi(page, "macos", {}, true);
   await page.goto("/tr/");
   await expect(page.locator("html")).toHaveAttribute("lang", "tr");
   await expect(page.locator("#content")).toBeVisible();
@@ -86,7 +87,7 @@ test("Turkish page renders the content card without layout overflow", async ({ p
 
 for (const locale of ["ar", "fa"] as const) {
   test(`${locale} content page keeps its right-to-left layout inside the viewport`, async ({ page }) => {
-    await mockApi(page);
+    await mockApi(page, "macos", {}, true);
     await page.goto(`/${locale}/`);
     await expect(page.locator("html")).toHaveAttribute("lang", locale);
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
@@ -149,33 +150,196 @@ test("a lab that is missing requirements hides its runtime sections until they a
   await expect(page.getByRole("button", { name: "Attach simulator" })).toBeVisible();
 });
 
-test("the simulator drawer lists real devices and skips the low-disk nudge when the disk is fine", async ({ page }) => {
+test("the macOS Lab panic-stop App Intent reports success and failure", async ({ page }) => {
   await mockApi(page, "macos");
+  let stops = 0;
+  await page.route("**/api/labs/macos/stop", (route) => {
+    stops += 1;
+    return route.fulfill({ json: { ok: true, disarmed: true, sessionsClosed: [] } });
+  });
+  await page.goto("/labs/macos/#intent=panic-stop");
+  await expect(page.getByRole("status")).toContainText("macOS Lab control stopped.");
+  expect(stops).toBe(1);
+  await expect(page).toHaveURL(/\/labs\/macos\/$/);
+
+  await page.route("**/api/labs/macos/stop", (route) => route.fulfill({ status: 500, json: { error: "Stop bridge unavailable" } }));
+  await page.goto("/labs/macos/#intent=panic-stop");
+  await expect(page.getByRole("alert")).toContainText("Could not stop macOS Lab control: Stop bridge unavailable");
+});
+
+test("the submission-review App Intent opens the guarded macOS Lab workflow", async ({ page }) => {
+  await mockApi(page, "macos");
+  let stops = 0;
+  await page.route("**/api/labs/macos/stop", (route) => {
+    stops += 1;
+    return route.fulfill({ json: { ok: true, disarmed: true, sessionsClosed: [] } });
+  });
+  await page.goto("/labs/macos/#intent=verify-submission");
+  await expect(page.getByRole("status")).toContainText("Submission review opened.");
+  await expect(page.getByRole("status")).toContainText("Control actions still require confirmation or armed mode.");
+  await expect(page).toHaveURL(/\/labs\/macos\/$/);
+  expect(stops).toBe(0);
+});
+
+test("the iOS actions card checks real devices and the frame captures a selected phone", async ({ page }) => {
+  await mockApi(page, "macos");
+  const udid = "C2AC1E99-DB20-5F29-BC57-4EE540DCFEBA";
+  let checked = 0;
+  let captured = 0;
   await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
     available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
     devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Shutdown" }], booted: []
   } }));
   await page.route("**/api/labs/ios/devices", (route) => route.fulfill({ json: {
     available: true, reason: null,
-    devices: [{ udid: "00008101-XYZ", name: "iPhone 15", osVersion: "17.4", state: "connected",
+    devices: [{ udid, name: "iPhone 15", osVersion: "17.4", state: "connected",
                 paired: true, transport: "localNetwork", lastSeen: "2026-11-15T09:26:00.000Z" }]
+  } }));
+  await page.route("**/api/labs/ios/devices/check?udid=*", (route) => {
+    checked += 1;
+    return route.fulfill({ json: { reachable: true, state: "connected", name: "iPhone 15", osVersion: "17.4", developerMode: true } });
+  });
+  await page.route("**/api/labs/ios/screenshot?udid=*", (route) => {
+    captured += 1;
+    return route.fulfill({ body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=", "base64"), contentType: "image/png" });
+  });
+  await page.goto("/labs/ios/");
+  const actions = page.getByRole("heading", { name: "Actions" }).locator("xpath=ancestor::section[1]");
+  await expect(actions.getByRole("heading", { name: "Real devices" })).toBeVisible();
+  await expect(actions.getByText("iPhone 15")).toBeVisible();
+  await expect(actions.getByText("Connected", { exact: true })).toBeVisible();
+  await expect(actions.getByText("Real-device control needs Developer Mode and a signed WebDriverAgent.")).toHaveCount(0);
+  expect(checked).toBeGreaterThan(0);
+  await actions.getByRole("button", { name: "Open iPhone 15 in simulator frame" }).click();
+  await expect(page.getByRole("complementary", { name: "Simulator" })).toBeVisible();
+  // The Xcode line names the real install location, not an assumed path.
+  await expect(page.getByText("/Volumes/Apps/Applications/Xcode.app", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Host details" }).click();
+  await expect(page.getByText("/Volumes/Apps/Applications/Xcode.app", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Device" })).toHaveValue(`real:${udid}`);
+  await expect(page.getByRole("img", { name: "Real device screen" })).toBeVisible();
+  expect(captured).toBeGreaterThan(0);
+  await expect(page.getByText("System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.")).toHaveCount(0);
+});
+
+test("running simulator cards open the chosen simulator frame", async ({ page }) => {
+  await mockApi(page, "macos");
+  const booted = [
+    { udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" },
+    { udid: "UDID-2", name: "iPhone 18", runtime: "iOS 27.2", state: "Booted" }
+  ];
+  let capturedDevice = "";
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"], devices: booted, booted
+  } }));
+  await page.route("**/api/labs/ios/screenshot?device=*", (route) => {
+    capturedDevice = new URL(route.request().url()).searchParams.get("device") ?? "";
+    return route.fulfill({ body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=", "base64"), contentType: "image/png" });
+  });
+  await page.goto("/labs/ios/");
+  const actions = page.getByRole("heading", { name: "Actions" }).locator("xpath=ancestor::section[1]");
+  await expect(actions.getByRole("heading", { name: "Running simulators" })).toBeVisible();
+  await actions.getByRole("button", { name: "Open iPhone 18 in simulator frame" }).click();
+  await expect(page.getByRole("combobox", { name: "Device" })).toHaveValue("sim:UDID-2");
+  await expect(page.getByRole("img", { name: "Simulator screen" })).toBeVisible();
+  expect(capturedDevice).toBe("UDID-2");
+});
+
+test("the real-device setup warning appears when Developer Mode is off", async ({ page }) => {
+  await mockApi(page, "macos");
+  const udid = "C2AC1E99-DB20-5F29-BC57-4EE540DCFEBA";
+  await page.route("**/api/labs/ios/devices", (route) => route.fulfill({ json: {
+    available: true, reason: null, devices: [{ udid, name: "iPhone 15", osVersion: "17.4", state: "connected" }]
+  } }));
+  await page.route("**/api/labs/ios/devices/check?udid=*", (route) => route.fulfill({ json: {
+    reachable: true, state: "connected", developerMode: false
+  } }));
+  await page.goto("/labs/ios/");
+  await expect(page.getByText("Real-device control needs Developer Mode and a signed WebDriverAgent.")).toBeVisible();
+});
+
+test("the simulator panel docks on desktop and overlays a phone", async ({ page }) => {
+  await mockApi(page, "macos", { ios: { actions: [
+    { id: "appium-start", label: "Start Appium", description: "Start Appium", privileged: false },
+    { id: "appium-stop", label: "Stop Appium", description: "Stop Appium", privileged: false }
+  ] } });
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"], devices: [], booted: []
+  } }));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/labs/ios/");
+  await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  const appiumActions = page.getByRole("group", { name: "Appium" });
+  const actionCard = appiumActions.locator("xpath=parent::div");
+  const stopButton = appiumActions.getByRole("button", { name: "Stop" });
+  await expect(stopButton).toBeVisible();
+  const cardBounds = await actionCard.boundingBox();
+  const stopBounds = await stopButton.boundingBox();
+  expect({ cardBounds, stopBounds, fits: !!cardBounds && !!stopBounds && stopBounds.x + stopBounds.width <= cardBounds.x + cardBounds.width }).toMatchObject({ fits: true });
+  const panel = page.getByRole("complementary", { name: "Simulator" });
+  const desktop = await page.evaluate(() => {
+    const main = document.querySelector("main")!.getBoundingClientRect();
+    const aside = document.querySelector('aside[aria-label="Simulator"]')!.getBoundingClientRect();
+    return { mainRight: main.right, panelLeft: aside.left, position: getComputedStyle(document.querySelector('aside[aria-label="Simulator"]')!).position };
+  });
+  expect(desktop.position).toBe("sticky");
+  expect(desktop.mainRight).toBeLessThanOrEqual(desktop.panelLeft + 1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveCSS("position", "fixed");
+  await expect(panel).toHaveCSS("width", "390px");
+});
+
+test("an unreachable real device stays faded and has an offline frame", async ({ page }) => {
+  await mockApi(page, "macos");
+  const udid = "C2AC1E99-DB20-5F29-BC57-4EE540DCFEBA";
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"], devices: [], booted: []
+  } }));
+  await page.route("**/api/labs/ios/devices", (route) => route.fulfill({ json: {
+    available: true, reason: null, devices: [{ udid, name: "iPhone 15", osVersion: "17.4", state: "unavailable" }]
+  } }));
+  await page.route("**/api/labs/ios/devices/check?udid=*", (route) => route.fulfill({ json: {
+    reachable: false, reason: "Device did not answer"
+  } }));
+  let captured = 0;
+  await page.route("**/api/labs/ios/screenshot?udid=*", (route) => { captured += 1; return route.fulfill({ status: 503 }); });
+  await page.goto("/labs/ios/");
+  await expect(page.getByText("Offline", { exact: true })).toBeVisible();
+  await expect(page.getByText("Device did not answer", { exact: true })).not.toBeVisible();
+  await page.getByText("Device details").click();
+  await expect(page.getByText("Device did not answer", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  await page.getByRole("combobox", { name: "Device" }).selectOption(`real:${udid}`);
+  await expect(page.getByTestId("ios-device-screen").getByText("Offline", { exact: true })).toBeVisible();
+  expect(captured).toBe(0);
+});
+
+test("host pressure without a running simulator does not open the watchdog alert", async ({ page }) => {
+  await mockApi(page, "macos");
+  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+    available: true, configuredDevice: "", runtimes: ["iOS 27.2"], devices: [], booted: []
+  } }));
+  await page.route("**/api/labs/ios/resources", (route) => route.fulfill({ json: {
+    available: true, reason: null,
+    cpu: { percent: 100, warn: 85, critical: 95 },
+    memory: { totalBytes: 16 * 1024 ** 3, usedBytes: 15 * 1024 ** 3, percent: 96, warn: 85, critical: 92 },
+    simulator: { running: false, cpuPercent: 0, rssBytes: null }
   } }));
   await page.goto("/labs/ios/");
   await page.getByRole("button", { name: "Simulator", exact: true }).click();
-  // The Xcode line names the real install location, not an assumed path.
-  await expect(page.getByText("/Volumes/Apps/Applications/Xcode.app", { exact: true })).toBeVisible();
-  // Real devices list with their connection state; the nudge stays hidden on a healthy disk.
-  await expect(page.getByRole("heading", { name: "Real devices" })).toBeVisible();
-  await expect(page.getByText("iPhone 15")).toBeVisible();
-  await expect(page.getByText("connected", { exact: true })).toBeVisible();
-  await expect(page.getByText("System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Host details" }).click();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
+  await page.waitForTimeout(11000);
+  await expect(page.getByText("System resources are running low")).toHaveCount(0);
 });
 
 test("the resource watchdog opens the alert and can stop all simulators", async ({ page }) => {
   await mockApi(page, "macos");
   await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
     available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
-    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }], booted: []
+    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }],
+    booted: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }]
   } }));
   await page.route("**/api/labs/ios/resources", (route) => route.fulfill({ json: {
     available: true, reason: null,
@@ -190,6 +354,7 @@ test("the resource watchdog opens the alert and can stop all simulators", async 
   await page.route("**/api/labs/start", (route) => route.fulfill({ json: { id: "j1", kind: "run", state: "running", request: {}, progress: null, result: null, error: null } }));
   await page.goto("/labs/ios/");
   await page.getByRole("button", { name: "Simulator", exact: true }).click();
+  await page.getByRole("button", { name: "Host details" }).click();
   // Two critical polls open the alert; the meters show the pressure first.
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("System resources are running low")).toBeVisible({ timeout: 20000 });
@@ -204,7 +369,8 @@ test("the armed auto-stop fires without the alert", async ({ page }) => {
   await mockApi(page, "macos");
   await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
     available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
-    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }], booted: []
+    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }],
+    booted: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Booted" }]
   } }));
   await page.route("**/api/labs/ios/resources", (route) => route.fulfill({ json: {
     available: true, reason: null,
@@ -225,21 +391,29 @@ test("the armed auto-stop fires without the alert", async ({ page }) => {
   await expect(page.getByText("System resources are running low")).toHaveCount(0);
 });
 
-test("the low-disk nudge offers the relocation tab when the home volume is under pressure", async ({ page }) => {
-  await mockApi(page, "macos");
-  await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
-    available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
-    devices: [{ udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: "Shutdown" }], booted: []
-  } }));
-  await page.route("**/api/cleanup/volumes", (route) => route.fulfill({ json: {
-    platform: "macos", threshold: 0.9, homeVolume: "/", warnings: ["Volume / is running low on free space."], error: null,
-    volumes: [{ mountPoint: "/", name: "Macintosh HD", device: "/dev/disk1", filesystem: "apfs", kind: "root", totalBytes: 500 * 1024 ** 3, freeBytes: 8 * 1024 ** 3, usedBytes: 492 * 1024 ** 3, usage: 0.98, purgeableBytes: null, isHome: true, pressure: "warning", error: null }]
-  } }));
-  await page.goto("/labs/ios/");
-  await page.getByRole("button", { name: "Simulator", exact: true }).click();
-  await expect(page.getByText("System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open Relocation" })).toBeVisible();
-});
+for (const booted of [false, true]) {
+  test(`the low-disk nudge ${booted ? "appears for a booted simulator" : "stays hidden without a booted simulator"}`, async ({ page }) => {
+    await mockApi(page, "macos");
+    const device = { udid: "UDID-1", name: "iPhone 17", runtime: "iOS 27.2", state: booted ? "Booted" : "Shutdown" };
+    await page.route("**/api/labs/ios/simulator", (route) => route.fulfill({ json: {
+      available: true, configuredDevice: "", runtimes: ["iOS 27.2"],
+      devices: [device], booted: booted ? [device] : []
+    } }));
+    await page.route("**/api/cleanup/volumes", (route) => route.fulfill({ json: {
+      platform: "macos", threshold: 0.9, homeVolume: "/", warnings: ["Volume / is running low on free space."], error: null,
+      volumes: [{ mountPoint: "/", name: "Macintosh HD", device: "/dev/disk1", filesystem: "apfs", kind: "root", totalBytes: 500 * 1024 ** 3, freeBytes: 8 * 1024 ** 3, usedBytes: 492 * 1024 ** 3, usage: 0.98, purgeableBytes: null, isHome: true, pressure: "warning", error: null }]
+    } }));
+    await page.goto("/labs/ios/");
+    await page.getByRole("button", { name: "Simulator", exact: true }).click();
+    const nudge = page.getByText("System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.");
+    if (booted) {
+      await expect(nudge).toBeVisible();
+      await expect(page.getByRole("link", { name: "Open Relocation" })).toBeVisible();
+    } else {
+      await expect(nudge).toHaveCount(0);
+    }
+  });
+}
 
 test("setup is offered only when a required dependency is missing", async ({ page }) => {
   const setup = { id: "setup", label: "Setup", description: "Install prerequisites", privileged: false };
@@ -303,6 +477,7 @@ test("Android run failures are shown next to the action", async ({ page }) => {
 });
 
 test("every local page type hydrates without a browser error", async ({ page }) => {
+  test.setTimeout(90_000); // This test navigates through 25 built pages.
   await mockApi(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -339,7 +514,8 @@ for (const locale of ["", "/tr"]) {
 test("Source readiness keeps optional browser tooling separate from core setup", async ({ page }) => {
   await mockApi(page, "linux");
   await page.goto("/labs/source/");
-  await expect(page.getByRole("main").getByRole("heading", { name: "Source Lab", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Source Lab", exact: true })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("heading", { name: "Source Lab", exact: true })).toHaveCount(0);
   // Found requirements stay out of the card: the summary badge reports them, Playwright is still listed.
   await expect(page.getByText("Python 3.11+", { exact: true })).toHaveCount(0);
   await expect(page.getByText("1 of 2 found")).toBeVisible();
@@ -551,7 +727,7 @@ test("the app mirror previews mirror clicks and runs them directly while armed",
   } }));
 
   await page.goto("/labs/macos/");
-  await expect(page.getByLabel("Window")).toBeVisible();
+  await expect(page.getByLabel("Window", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Elements" }).click();
   const hotspot = page.getByRole("button", { name: "1: OK" });
   await expect(hotspot).toBeVisible();
@@ -567,4 +743,36 @@ test("the app mirror previews mirror clicks and runs them directly while armed",
   await expect(page.getByText("Armed — mirror clicks run immediately on this Mac.")).toBeVisible();
   await hotspot.click();
   await expect.poll(() => clicks).toBe(1);
+});
+
+test("jobs view lists the Frida targets and shows a refused address", async ({ page }) => {
+  await mockApi(page);
+  const asked: string[] = [];
+  await page.route("**/api/frida/inventory*", async (route) => {
+    const host = new URL(route.request().url()).searchParams.get("host") ?? "";
+    asked.push(host);
+    if (host === "8.8.8.8") {
+      await route.fulfill({ status: 400, json: { error: "8.8.8.8 is not a loopback or private lab address; refusing" } });
+      return;
+    }
+    const device = host
+      ? { id: `tcp@${host}`, type: "remote", transport: "TCP", name: host, os: null, processes: [{ pid: 1, name: "frida-server" }, { pid: 10, name: "sleep" }], processCount: 2, error: null }
+      : { id: "local", type: "local", transport: "local", name: "Local System", os: null, processes: [{ pid: 4, name: "init" }], processCount: 1, error: null };
+    await route.fulfill({ json: {
+      schema: "oslab.frida-inventory/1", generatedAt: "2026-11-13T00:00:00Z", backend: "api", devices: [device],
+      summary: { devices: 1, usb: 0, tcp: host ? 1 : 0, processes: device.processCount }, errors: []
+    } });
+  });
+  await page.goto("/jobs/");
+  const card = page.locator("#frida-targets");
+  await expect(card.getByText("Local System")).toBeVisible();
+  await card.getByLabel("Lab target address").fill("127.0.0.1:27042");
+  await card.getByRole("button", { name: "Check" }).click();
+  await expect(card.getByText("tcp@127.0.0.1:27042")).toBeVisible();
+  await card.getByText("Show processes").click();
+  await expect(card.getByText("frida-server", { exact: true })).toBeVisible();
+  await card.getByLabel("Lab target address").fill("8.8.8.8");
+  await card.getByRole("button", { name: "Check" }).click();
+  await expect(card.getByRole("alert")).toContainText("refusing");
+  expect(asked).toEqual(["", "127.0.0.1:27042", "8.8.8.8"]);
 });

@@ -98,7 +98,7 @@ export default function WebLabPage() {
     <TopBar title="Web Lab" icon={<GlobeIcon size={20} />} />
     <div className="flex w-full items-start">
       <main className={panelOpen && ready ? (panelExpanded ? "hidden" : "min-w-0 flex-1 p-4 sm:p-6") : "mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 sm:p-6"}>
-        <PageHead icon={<GlobeIcon size={22} />} title="Web Lab" description="Drive a real embedded browser window, inject JavaScript before page scripts and on demand, and read what pages expose."
+        <PageHead toolbarOnly icon={<GlobeIcon size={22} />} title="Web Lab" description="Drive a real embedded browser window, inject JavaScript before page scripts and on demand, and read what pages expose."
           actions={ready ? <button type="button" className="iux-btn" aria-pressed={panelOpen} onClick={() => setPanelOpen((open) => !open)}>Preview panel</button> : undefined} />
         {loadError && <Status value={{ ok: false, text: loadError }} />}
         {!data ? <p role="status">Loading Web Lab readiness…</p> : data.status.state !== "ready" ? <div className="mt-5"><ReadinessGate state={data.status.state} busy={busy} onStart={() => void run(() => api.webEngineStart())} /></div> : <>

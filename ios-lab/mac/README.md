@@ -65,16 +65,18 @@ first available iPhone when the configured device is not installed.
 
 ### Real devices and Xcode location
 
-The dashboard's simulator drawer and `make mac-doctor` report two things the
+The dashboard's iOS Actions card, simulator panel and `make mac-doctor` report two things the
 simulator scripts alone never could:
 
 - **Real devices** — paired or connected iPhones and iPads, listed read-only
-  via `xcrun devicectl` (simulator rows are filtered out). Listing is all the
-  lab offers today: actually driving a real device needs Developer Mode
-  enabled on the device, a WebDriverAgent signed to your team (free personal
-  team works for a first run; the existing Appium XCUITest stack drives it
-  once WDA is installed), and screenshots on a real device also go through
-  WDA — `xcrun simctl io` only works on simulators.
+  via `xcrun devicectl` (simulator rows are filtered out). The Actions card
+  checks the current connection tunnel automatically; a paired phone whose
+  tunnel is unavailable appears dimmed as Offline. Selecting a connected
+  real device in the simulator panel captures its screen with `xcrun devicectl
+  device capture screenshot`, without WebDriverAgent. Actually driving the
+  device still needs Developer Mode and a WebDriverAgent signed to your team
+  (a free personal team works for a first run; the existing Appium XCUITest
+  stack drives it once WDA is installed).
 - **Where Xcode lives** — detection follows `xcode-select`/PATH, never an
   assumed install path. An Xcode installed on another volume (e.g.
   `/Volumes/Apps/Applications/Xcode.app`) is detected wherever it is and the

@@ -43,7 +43,8 @@ test("the workbench drives a running engine: windows, injections and the event l
     return route.fulfill({ json: { windows: overview.windows } });
   });
   await page.goto("/web-lab/");
-  await expect(page.getByRole("main").getByRole("heading", { name: "Web Lab" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Web Lab" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("heading", { name: "Web Lab" })).toHaveCount(0);
   await expect(page.getByText("Running", { exact: true })).toBeVisible();
   await expect(page.getByRole("main").getByText("https://example.com/", { exact: true })).toBeVisible();
   await expect(page.getByText("canary", { exact: true })).toBeVisible();

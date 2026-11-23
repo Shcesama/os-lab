@@ -42,10 +42,16 @@ test("quick cleanup dashboard: scan all, suggested plan, confirm, report and his
   await expect(page.getByText("50% used", { exact: false })).toBeVisible();
   await expect(page.getByText("232.8 GB", { exact: false }).first()).toBeVisible();
   await expect(page.getByText("Purgeable space is managed by macOS", { exact: false })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Review cleanup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Quick clean" })).toBeVisible();
+  // No bookmarks in this fixture, so the honest disabled state with its reason shows.
+  await expect(page.getByRole("main").getByRole("button", { name: "Quick clean", exact: true })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Clean", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Scan now" }).click();
-  await expect(page.getByText("142 B measured across 2 categories", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "Review plan" }).click();
+  await expect(page.getByText("Last scan measured 142 B")).toBeVisible();
+  // The scan card now replaces the old suggested-plan row: a "Scan complete" summary whose Clean button
+  // (named with the selected size) builds the trash plan that opens the confirmation dialog.
+  await expect(page.getByRole("heading", { name: "Scan complete" })).toBeVisible();
+  await page.getByRole("main").getByRole("button", { name: /^Clean 42\b/ }).click();
   expect(calls.find((call) => call.path === "/api/cleanup/scan")?.body).toEqual({ entryIds: ["system.caches", "browser.private"] });
   expect(calls.find((call) => call.path === "/api/cleanup/plan")?.body).toEqual({ entryIds: ["system.caches"], mode: "trash" });
   await expect(page.getByRole("dialog")).toContainText("1 items");
@@ -53,8 +59,9 @@ test("quick cleanup dashboard: scan all, suggested plan, confirm, report and his
   await page.getByRole("button", { name: "Run clean" }).click();
   await expect(page.getByText("moved to Trash, not yet freed.", { exact: false })).toBeVisible();
   expect(calls.filter((call) => call.path === "/api/cleanup/clean")[0].body).toEqual({ planId: "plan-1" });
-  // CLNP-21: the Space Explorer capability card navigates its tab in place.
-  await page.getByRole("button", { name: "Space Explorer" }).click();
+  // CLNP-21: the Space Explorer capability card moved to Settings and still navigates its tab in place.
+  await page.goto("/cleanup/settings/");
+  await page.getByRole("main").getByRole("button", { name: "Space Explorer" }).click();
   await expect(page).toHaveURL(/\/cleanup\/space\/$/);
   await expect(page.getByRole("heading", { name: "Space Explorer" })).toBeVisible();
   await expect(page.getByText("Pick a root and measure it to see its folders by size.")).toBeVisible();

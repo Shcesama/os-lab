@@ -12,6 +12,7 @@ import {
   CircleNotchIcon,
   DeviceMobileIcon,
   FrameCornersIcon,
+  InfoIcon,
   PowerIcon,
   XIcon
 } from "@phosphor-icons/react";
@@ -110,10 +111,15 @@ function ResourceDialog({
   </dialog>;
 }
 
-export function SimulatorDrawer({ open, onClose, onPreview }: { open: boolean; onClose: () => void; onPreview: (action: string, extra?: Partial<LabRequest>) => void }) {
+export function SimulatorDrawer({ open, target, onTargetChange, onClose, onPreview }: {
+  open: boolean; target: string; onTargetChange: (target: string) => void;
+  onClose: () => void; onPreview: (action: string, extra?: Partial<LabRequest>) => void;
+}) {
+  const [showHostDetails, setShowHostDetails] = useState(false);
+  useEffect(() => { if (!open) setShowHostDetails(false); }, [open]);
   if (!open) return null;
   return (
-    <aside role="dialog" aria-label="Simulator" className="iux-sidepanel fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-(--iux-border) bg-(--iux-background) shadow-2xl">
+    <aside aria-label="Simulator" className="iux-sidepanel fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col border-l border-(--iux-border) bg-(--iux-background) shadow-2xl lg:sticky lg:inset-y-auto lg:top-14 lg:z-auto lg:h-[calc(100vh-3.5rem)] lg:w-[28rem] lg:max-w-none lg:shrink-0 lg:shadow-none xl:w-[32rem]">
       <header className="flex items-center gap-2 border-b border-(--iux-border) px-5 py-3">
         <span className="shrink-0 text-[#f36c21]">
           <DeviceMobileIcon size={16} />
@@ -122,21 +128,27 @@ export function SimulatorDrawer({ open, onClose, onPreview }: { open: boolean; o
           <h2 className="text-sm font-semibold">Simulator</h2>
           <p className="text-xs text-(--iux-muted-foreground)">Pick a device, attach it and watch its screen here.</p>
         </div>
+        <IconButton label="Host details" expanded={showHostDetails} onClick={() => setShowHostDetails((value) => !value)}>
+          <InfoIcon size={14} />
+        </IconButton>
         <IconButton label="Close" onClick={onClose} className="ml-auto">
           <XIcon size={14} weight="bold" />
         </IconButton>
       </header>
       <div className="flex-1 overflow-y-auto p-5">
-        <SimulatorBody onPreview={onPreview} />
+        <SimulatorBody onPreview={onPreview} showHostDetails={showHostDetails} target={target} onTargetChange={onTargetChange} />
       </div>
     </aside>
   );
 }
 
-function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Partial<LabRequest>) => void }) {
+function SimulatorBody({ onPreview, showHostDetails, target, onTargetChange }: {
+  onPreview: (action: string, extra?: Partial<LabRequest>) => void; showHostDetails: boolean;
+  target: string; onTargetChange: (target: string) => void;
+}) {
   const { data, error } = usePoll(() => api.iosSimulator(), SCREEN_INTERVAL);
   const { data: hostReport } = usePoll(() => api.host(), 0);
-  const { data: realDevices, error: devicesError } = usePoll<IosDevicesInfo>(() => api.iosDevices(), DEVICES_INTERVAL);
+  const { data: realDevices, reload: reloadRealDevices } = usePoll<IosDevicesInfo>(() => api.iosDevices(), DEVICES_INTERVAL);
   const { data: volumeReport } = usePoll<CleanupVolumes>(() => api.cleanupVolumes(), 0);
   const { data: resources } = usePoll<IosResources>(() => api.iosResources(), SCREEN_INTERVAL);
   const home = volumeReport?.volumes?.find((v) => v.isHome) ?? null;
@@ -153,7 +165,13 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
   const [stopError, setStopError] = useState("");
   const criticalStreak = useRef(0);
   const lastAlertAt = useRef(0);
+  const simulatorRunning = !!data?.booted?.length && resources?.simulator?.running === true;
   useEffect(() => {
+    if (!simulatorRunning) {
+      criticalStreak.current = 0;
+      setResourceAlert(false);
+      return;
+    }
     const mem = resources?.memory?.percent;
     const cpu = resources?.cpu?.percent;
     const critical = (mem != null && mem >= (resources?.memory?.critical ?? 92))
@@ -175,7 +193,7 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
       setResourceAlert(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resources, autoStop]);
+  }, [resources, autoStop, simulatorRunning]);
 
   /** Stop all simulators, or just the selected device — still through the console's previewed plan → token flow. */
   async function stopSimulators(kind: "all" | "selected", automatic = false) {
@@ -202,41 +220,47 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
     } catch { /* private mode: the arm lives for this session only */ }
   }
 
-  // Reachability probes per device; devicectl connects the tunnel to answer.
-  const [checking, setChecking] = useState<string | null>(null);
-  const [checks, setChecks] = useState<Record<string, { reachable: boolean; reason?: string | null; name?: string; state?: string; developerMode?: boolean }>>({});
-  async function checkDevice(udid: string) {
-    setChecking(udid);
-    try {
-      const result = await api.iosDeviceCheck(udid);
-      setChecks((old) => ({ ...old, [udid]: result }));
-    } catch (e) {
-      setChecks((old) => ({ ...old, [udid]: { reachable: false, reason: message(e) } }));
-    } finally {
-      setChecking(null);
-    }
-  }
   const [framed, setFramed] = useState(true);
   // An older console (or the e2e mock) may answer {}; every field is optional in practice.
   const devices = data?.devices ?? [];
-  const booted = data?.booted?.[0] ?? null;
+  const firstBooted = data?.booted?.[0] ?? null;
 
   // The picker starts on the booted device, else the configured one, else the first iPhone.
   const defaultUdid = useMemo(
     () =>
-      booted?.udid ??
+      firstBooted?.udid ??
       (data?.configuredDevice ? devices.find((d) => d.name === data.configuredDevice)?.udid : undefined) ??
       devices.find((d) => d.name.startsWith("iPhone"))?.udid ??
       devices[0]?.udid ??
       "",
-    [booted?.udid, data?.configuredDevice, devices]
+    [firstBooted?.udid, data?.configuredDevice, devices]
   );
   useEffect(() => {
     if (defaultUdid && !devices.some((d) => d.udid === udid)) setUdid(defaultUdid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultUdid]);
 
-  const selected = devices.some((d) => d.udid === udid) ? udid : defaultUdid;
+  const requestedSimulator = target.startsWith("sim:") ? target.slice(4) : udid;
+  const selected = devices.some((d) => d.udid === requestedSimulator) ? requestedSimulator : defaultUdid;
+  const booted = data?.booted?.find((device) => device.udid === selected) ?? null;
+  const selectedReal = target.startsWith("real:") ? target.slice(5) : "";
+  const realDevice = realDevices?.devices.find((device) => device.udid === selectedReal) ?? null;
+  const showReal = !!selectedReal;
+  const [realCheck, setRealCheck] = useState<{ udid: string; reachable: boolean } | null>(null);
+  const [realCheckRevision, retryRealCheck] = useState(0);
+  useEffect(() => {
+    if (!selectedReal) return;
+    let live = true;
+    setRealCheck(null);
+    void api.iosDeviceCheck(selectedReal).then(
+      (result) => { if (live) setRealCheck({ udid: selectedReal, reachable: result.reachable }); },
+      () => { if (live) setRealCheck({ udid: selectedReal, reachable: false }); }
+    );
+    return () => { live = false; };
+  }, [selectedReal, realCheckRevision]);
+  const checkedReal = realCheck?.udid === selectedReal ? realCheck : null;
+  const realPending = showReal && !checkedReal;
+  const realOffline = showReal && checkedReal?.reachable === false;
   const attach = () => onPreview("start", selected ? { device: selected } : {});
   const detach = () => onPreview("stop");
 
@@ -244,32 +268,42 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
   const [shotError, setShotError] = useState<string | null>(null);
   const [shotBusy, setShotBusy] = useState(false);
   const shotRef = useRef<string | null>(null);
+  const shotRequest = useRef(0);
   const grab = useCallback(async () => {
+    const request = ++shotRequest.current;
     setShotBusy(true);
     try {
-      const res = await fetch(api.iosScreenshotUrl, { cache: "no-store" });
+      const res = await fetch(showReal ? api.iosRealScreenshotUrl(selectedReal) : selected ? api.iosSimulatorScreenshotUrl(selected) : api.iosScreenshotUrl, { cache: "no-store" });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `${res.status} ${res.statusText}`);
       }
       const url = URL.createObjectURL(await res.blob());
+      if (request !== shotRequest.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
       if (shotRef.current) URL.revokeObjectURL(shotRef.current);
       shotRef.current = url;
       setShot(url);
       setShotError(null);
     } catch (e) {
-      setShotError(message(e));
+      if (request === shotRequest.current) setShotError(message(e));
     } finally {
-      setShotBusy(false);
+      if (request === shotRequest.current) setShotBusy(false);
     }
-  }, []);
+  }, [showReal, selectedReal, selected]);
   useEffect(() => () => {
     if (shotRef.current) URL.revokeObjectURL(shotRef.current);
   }, []);
   useEffect(() => {
-    if (!booted) {
-      setShot(null);
-      setShotError(null);
+    shotRequest.current += 1;
+    if (shotRef.current) URL.revokeObjectURL(shotRef.current);
+    shotRef.current = null;
+    setShot(null);
+    setShotError(null);
+    if ((!booted && !showReal) || realOffline || realPending) {
+      setShotBusy(false);
       return;
     }
     void grab();
@@ -277,7 +311,7 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
       if (!document.hidden) void grab();
     }, SCREEN_INTERVAL);
     return () => clearInterval(timer);
-  }, [booted?.udid, grab]);
+  }, [booted?.udid, showReal, realOffline, realPending, selectedReal, grab]);
 
   return (
     <>
@@ -289,19 +323,19 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
         <Empty>{data.reason ?? "The simulator tooling is not usable on this Mac."}</Empty>
       ) : (
         <>
-          {diskTight && home && (
+          {diskTight && home && booted && !showReal && (
             <div className="mb-5 w-full max-w-sm rounded-md border border-(--iux-warning) p-3 text-sm">
               <p>System disk is running low. Simulator device data can move to another volume from the Cleanup Lab.</p>
               <p className="mt-1 text-xs text-(--iux-muted-foreground)" dir="ltr">{home.mountPoint} · {home.freeBytes == null ? "?" : Math.round(home.freeBytes / 1024 ** 3)} GiB free</p>
               <a className="iux-btn mt-2" data-variant="outline" href={localePath("/cleanup/relocation/", locale())}>Open Relocation</a>
             </div>
           )}
-          {xcodePath && (
+          {showHostDetails && xcodePath && (
             <p className="mb-4 w-full max-w-sm break-all text-xs text-(--iux-muted-foreground)">
               <span className="font-medium">Xcode</span> · <span translate="no">{xcodePath}</span>
             </p>
           )}
-          {resources?.available && resources.memory && resources.cpu && (
+          {showHostDetails && resources?.available && resources.memory && resources.cpu && (
             <section className="mb-4 w-full max-w-sm rounded-md border border-(--iux-border) p-3">
               <h3 className="text-sm font-semibold">Resources</h3>
               <div className="mt-2 flex flex-col gap-2">
@@ -318,24 +352,27 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
                 <input type="checkbox" className="mt-0.5" checked={autoStop} onChange={(e) => armAutoStop(e.target.checked)} />
                 Stop simulators automatically when the system runs out of resources
               </label>
-              {stopNote && <p role="status" className="mt-2 text-xs">{stopNote}</p>}
-              {stopError && <Status value={{ ok: false, text: stopError }} />}
             </section>
           )}
+          {stopNote && <p role="status" className="mb-2 text-xs">{stopNote}</p>}
+          {stopError && <Status value={{ ok: false, text: stopError }} />}
           <div className="flex flex-col items-center gap-5">
           <div className="flex w-full max-w-sm flex-wrap items-center justify-between gap-3">
             <div className="min-w-56 flex-1">
-              <Field label="Device" hint={data.runtimes[0]}>
-                <select className="iux-input" value={selected} onChange={(e) => setUdid(e.target.value)} aria-label="Device">
-                  {devices.map((d) => (
-                    <option key={d.udid} value={d.udid}>
-                      {d.name} · {d.runtime}
-                    </option>
-                  ))}
+              <Field label="Device" hint={showReal ? "Physical device · read-only screen" : data.runtimes[0]}>
+                <select className="iux-input" value={showReal ? `real:${selectedReal}` : `sim:${selected}`}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    onTargetChange(value);
+                    if (value.startsWith("sim:")) setUdid(value.slice(4));
+                  }} aria-label="Device">
+                  {devices.map((d) => <option key={d.udid} value={`sim:${d.udid}`}>Simulator · {d.name} · {d.runtime}</option>)}
+                  {showReal && !realDevice && <option value={`real:${selectedReal}`}>Real device · {selectedReal}</option>}
+                  {(realDevices?.devices ?? []).map((d) => <option key={d.udid} value={`real:${d.udid}`}>Real device · {d.name} · iOS {d.osVersion}</option>)}
                 </select>
               </Field>
             </div>
-            {booted ? (
+            {showReal ? <Badge tone={checkedReal?.reachable ? "success" : undefined}>{realOffline ? "Offline" : realPending ? "Checking…" : "Real device"}</Badge> : booted ? (
               <Badge tone="success">
                 Booted{` · ${booted.name}`}
               </Badge>
@@ -351,12 +388,24 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
               </>
             ) : null}
             <div
+              data-testid="ios-device-screen"
               className={`relative w-72 max-w-full overflow-hidden bg-black ${framed ? "rounded-[2.6rem]" : "rounded-xl border border-(--iux-border)"}`}
               style={{ aspectRatio: "393 / 852" }}
             >
-              {booted ? (
+              {realOffline ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-zinc-300">
+                  <DeviceMobileIcon size={30} className="text-zinc-500" aria-hidden />
+                  <p className="text-sm font-medium" translate="no">{realDevice?.name}</p>
+                  <Badge>Offline</Badge>
+                  <button type="button" className="iux-btn mt-1" data-variant="outline" onClick={() => { reloadRealDevices(); retryRealCheck((value) => value + 1); }}>Refresh</button>
+                </div>
+              ) : realPending ? (
+                <div className="flex h-full items-center justify-center" aria-busy="true">
+                  <CircleNotchIcon size={24} className="animate-spin text-zinc-500" aria-hidden />
+                </div>
+              ) : booted || showReal ? (
                 shot ? (
-                  <img src={shot} alt="Simulator screen" className="h-full w-full object-cover" />
+                  <img src={shot} alt={showReal ? "Real device screen" : "Simulator screen"} className="h-full w-full object-cover" />
                 ) : shotError ? (
                   <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
                     <p className="text-xs text-zinc-400">{shotError}</p>
@@ -391,7 +440,7 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
             <button type="button" className="iux-btn" data-variant="outline" aria-pressed={framed} onClick={() => setFramed((f) => !f)}>
               <FrameCornersIcon size={14} /> Frame
             </button>
-            <button type="button" className="iux-btn" data-variant="outline" disabled={!booted || shotBusy} onClick={() => void grab()}>
+            <button type="button" className="iux-btn" data-variant="outline" disabled={(!booted && !showReal) || shotBusy || realPending} onClick={() => realOffline ? (reloadRealDevices(), retryRealCheck((value) => value + 1)) : void grab()}>
               <ArrowClockwiseIcon size={14} /> Refresh
             </button>
             {shot ? (
@@ -399,7 +448,7 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
                 <CameraIcon size={14} /> Screenshot
               </a>
             ) : null}
-            {booted ? (
+            {booted && !showReal ? (
               <button type="button" className="iux-btn" data-variant="outline" onClick={detach}>
                 <PowerIcon size={14} /> Detach simulator
               </button>
@@ -408,53 +457,6 @@ function SimulatorBody({ onPreview }: { onPreview: (action: string, extra?: Part
         </div>
         </>
       )}
-      <section className="mt-6 w-full max-w-sm border-t border-(--iux-border) pt-4">
-        <h3 className="text-sm font-semibold">Real devices</h3>
-        <p className="text-xs text-(--iux-muted-foreground)">Paired and connected iPhones and iPads, read-only.</p>
-        {devicesError ? (
-          <Status value={{ ok: false, text: devicesError }} />
-        ) : !realDevices ? (
-          <Skeleton rows={1} />
-        ) : !realDevices.available ? (
-          <p className="mt-2 text-sm text-(--iux-muted-foreground)">{realDevices.reason}</p>
-        ) : realDevices.devices.length === 0 ? (
-          <Empty>No real devices are paired with this Mac.</Empty>
-        ) : (
-          <ul className="mt-1 flex flex-col gap-0.5">
-            {realDevices.devices.map((d) => {
-              const check = checks[d.udid];
-              const state = check?.reachable
-                ? (check.state === "connected" ? "connected" : "reachable")
-                : check ? "unreachable" : d.state;
-              return (
-                <li key={d.udid} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-sm">
-                  <span className="min-w-0 max-w-full truncate font-medium">{check?.name || d.name}</span>
-                  {state ? (
-                    <Badge tone={state === "connected" ? "success" : undefined}>{state}</Badge>
-                  ) : null}
-                  <span className="ms-auto flex items-center gap-1.5 text-xs text-(--iux-muted-foreground)">
-                    <span dir="ltr">{d.osVersion}</span>
-                    <button type="button" className="iux-btn" data-variant="ghost" disabled={checking === d.udid}
-                      onClick={() => void checkDevice(d.udid)}>
-                      {checking === d.udid ? "Checking…" : "Check"}
-                    </button>
-                  </span>
-                  <p className="w-full truncate text-xs text-(--iux-muted-foreground)" dir="ltr" title={d.udid}>
-                    <span translate="no">{d.udid}</span>
-                    {d.paired && (d.transport === "localNetwork" ? " · Wi-Fi" : d.transport ? " · USB" : "")}
-                    {d.lastSeen ? ` · ${new Date(d.lastSeen).toLocaleString(locale())}` : ""}
-                  </p>
-                  {check && !check.reachable && check.reason && <p className="w-full text-xs text-(--iux-danger)">{check.reason}</p>}
-                  {check?.reachable && check.developerMode === false && <p className="w-full text-xs text-(--iux-warning)">Developer Mode is off on this device.</p>}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <p className="mt-2 text-xs text-(--iux-muted-foreground)">
-          Controlling a real device needs Developer Mode and a signed WebDriverAgent — see the iOS lab README.
-        </p>
-      </section>
       {resourceAlert && !autoStop && resources?.available && (
         <ResourceDialog resources={resources} selectedName={devices.find((d) => d.udid === selected)?.name ?? null}
           stopping={stopping} stopError={stopError}

@@ -61,7 +61,7 @@ test("scan card bookmark toggles and quick clean opens the confirm dialog", asyn
 
   await page.getByRole("button", { name: "Bookmark this item" }).click();
   marked = true;
-  await page.goto("/cleanup/");
+  await page.goto("/cleanup/settings/");
   await expect(page.getByText("Caches", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Quick clean bookmarks" }).click();
   await expect(page.getByRole("dialog")).toContainText("Move to Trash");

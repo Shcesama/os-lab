@@ -24,7 +24,8 @@ test("cleanup tabs navigate in place without a reload", async ({ page }) => {
     await route.fulfill({ json: data });
   });
 
-  await page.goto("/cleanup/");
+  // The settings split: the shared tab row lives on the Settings tab and the detail pages.
+  await page.goto("/cleanup/settings/");
   await expect(page.getByRole("heading", { name: "Cleanup Lab" }).first()).toBeVisible();
   await page.evaluate(() => { (window as unknown as { __e2eMarker?: number }).__e2eMarker = 42; });
 

@@ -150,3 +150,58 @@ export function MonitorCard({
     </div>
   </Section>;
 }
+
+/**
+ * The main dashboard's read-only monitor stats: what the runner is doing and
+ * how each volume stands, without the configuration controls. Editing the
+ * thresholds stays on the Settings tab, one link away.
+ */
+export function MonitorStatsCard({
+  monitor, volumes, settingsHref
+}: {
+  monitor: CleanupMonitorStatus | null; volumes: CleanupVolume[] | null; settingsHref: string;
+}) {
+  if (!monitor || !Array.isArray(monitor.volumes)) return null;
+  const rows = monitor.volumes.length ? monitor.volumes.map((entry) => ({
+    key: entry.mountPoint,
+    label: entry.mountPoint || "Home volume",
+    freeBytes: entry.volume?.freeBytes ?? null,
+    state: monitor.state.volumes[`volumes:${entry.mountPoint}`]?.state,
+    monitored: true,
+  })) : (volumes ?? []).slice(0, 4).map((volume) => ({
+    key: volume.mountPoint,
+    label: volume.mountPoint,
+    freeBytes: volume.freeBytes ?? null,
+    state: volume.pressure === "warning" ? "warning" : undefined,
+    monitored: false,
+  }));
+  return <Section id="cleanup-monitor" title="Monitor stats" description="Free-space checks while the console runs. Thresholds and volumes are configured in Settings.">
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge tone={monitor.enabled ? "success" : undefined}>{monitor.enabled ? "Monitoring on" : "Monitoring off"}</Badge>
+      <span className="text-xs text-(--iux-muted-foreground)">
+        {monitor.enabled ? (monitor.running ? "runner active" : "runner starting") : "no checks run"}
+      </span>
+      {monitor.activeWarnings.length > 0 && <Badge tone="danger">{monitor.activeWarnings.length} {monitor.activeWarnings.length === 1 ? "warning" : "warnings"}</Badge>}
+      <a className="iux-btn ms-auto" href={settingsHref}>Configure</a>
+    </div>
+    <div className="mt-3 divide-y divide-(--iux-border)">
+      {rows.map((row) => <div key={row.key} className="flex flex-wrap items-center gap-2 py-2 text-sm">
+        <span className="min-w-0 flex-1 truncate" translate="no">{row.label}</span>
+        {row.freeBytes != null && <span dir="ltr" className="tabular-nums text-xs text-(--iux-muted-foreground)">{formatBytes(row.freeBytes)} free</span>}
+        <Badge tone={row.state === "warning" ? "danger" : row.state === "ok" ? "success" : undefined}>
+          {row.state === "warning" ? "warning" : row.state === "ok" ? "ok" : row.monitored ? "no data" : "not monitored"}
+        </Badge>
+      </div>)}
+      {!rows.length && <Empty>No volumes measured yet.</Empty>}
+    </div>
+    {monitor.state.events.length > 0 && <details className="mt-2 text-sm">
+      <summary className="cursor-pointer text-xs text-(--iux-muted-foreground)">Recent events</summary>
+      <ul className="mt-1 space-y-1 text-xs">
+        {monitor.state.events.slice(-4).reverse().map((event, index) => <li key={index} className="flex gap-2">
+          <BellIcon size={12} className={event.kind === "warning" ? "mt-0.5 text-(--iux-danger)" : event.kind === "recovered" ? "mt-0.5 text-(--iux-success)" : "mt-0.5 text-(--iux-muted-foreground)"} />
+          <span>{new Date(event.at * 1000).toLocaleTimeString()} · {event.kind} · <span translate="no">{event.volume}</span>{event.freeBytes != null && ` · ${formatBytes(event.freeBytes)} free`}{event.message && ` · ${event.message}`}</span>
+        </li>)}
+      </ul>
+    </details>}
+  </Section>;
+}

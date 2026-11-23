@@ -26,7 +26,10 @@ import { TopBar } from "../shell/top-bar";
 import { ShellSnippet } from "../apk-lab/components";
 import { Badge, Empty, EndpointList, Field, IconButton, Modal, PageHead, Section, Skeleton, Status } from "../components/ui";
 import { SimulatorDrawer } from "./ios-simulator";
+import { IosDeviceCards } from "./ios-real-devices";
 import { MacAppMirrorTeaser, MacAppPanel } from "./macos-app-mirror";
+import { MacEnginePanel } from "./macos-engine-panel";
+import { WinAppsPanel } from "./winapps-app-mirror";
 import { stateBadge } from "./host-page";
 import {
   ago,
@@ -46,6 +49,7 @@ import {
 const REFERENCE: Record<LabId, { check: string; setup: string; where: string }> = {
   android: { check: "./labctl android doctor", setup: "./labctl android start --wait", where: "android-lab/lab" },
   windows: { check: "./labctl win status", setup: "./labctl win profile use development\n./labctl win start --wait", where: "win-lab" },
+  winapps: { check: "python console/winapps.py", setup: "Run this panel on a Windows host.", where: "winapps" },
   linux: { check: "./labctl linux status", setup: "./labctl linux profile use development\n./labctl linux start --wait", where: "linux-lab" },
   ios: { check: "./labctl ios status", setup: "./labctl ios profile use development\n./labctl ios start --wait", where: "ios-lab" },
   source: { check: "./labctl source doctor", setup: "./labctl source setup", where: "source-lab" },
@@ -435,7 +439,7 @@ function ConfigurationModal({ lab, ready, onProfile, onClose }: { lab: LabId; re
 export default function LabPage({ lab: labId }: { lab: LabId }) {
   if (import.meta.env.PUBLIC_SITE_MODE === "pages" && labId === "source") {
     return <AppShell activeId="lab-source"><TopBar title="Source Lab" icon={LAB_ICON.source(20)} />
-      <main className="mx-auto max-w-4xl p-8"><PageHead icon={LAB_ICON.source(22)} title="Source Lab"
+      <main className="mx-auto max-w-4xl p-8"><PageHead toolbarOnly icon={LAB_ICON.source(22)} title="Source Lab"
         description="Runs locally with Python 3.11+. Open the installed console to check readiness and run analyses." />
         <a className="iux-btn mt-6" href="https://github.com/keyvanarasteh/os-lab/tree/master/source-lab">Repository</a>
       </main></AppShell>;
@@ -459,7 +463,9 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
   const [mirrorHidden, setMirrorHidden] = useState(false);
   // On-demand panels: the iOS simulator mirror and every lab's endpoints/configuration.
   const [simOpen, setSimOpen] = useState(false);
+  const [simTarget, setSimTarget] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [intentStatus, setIntentStatus] = useState<{ state: "pending" | "success" | "error"; message?: string; error?: string } | null>(null);
 
   const preview = async (action: string, extra: Partial<LabRequest> = {}) => {
     const req: LabRequest = { lab: labId, action, ...extra };
@@ -502,6 +508,34 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lab?.id, lab?.actions.length]);
 
+  // Native App Intents route guarded workflows here. Submission review only
+  // opens the existing mirror; panic stop is the sole action completed by the
+  // route. Arming is never available through a shortcut.
+  useEffect(() => {
+    if (labId !== "macos") return;
+    const handleIntent = () => {
+      const intent = window.location.hash;
+      if (intent !== "#intent=panic-stop" && intent !== "#intent=verify-submission") return;
+      history.replaceState(null, "", window.location.pathname);
+      if (intent === "#intent=verify-submission") {
+        setIntentStatus({
+          state: "success",
+          message: "Submission review opened. Select a Terminal or VM window to inspect and capture evidence. Control actions still require confirmation or armed mode.",
+        });
+        return;
+      }
+      setIntentStatus({ state: "pending", message: "Stopping macOS Lab control…" });
+      void api.macosStop().then(() => {
+        setIntentStatus({ state: "success", message: "macOS Lab control stopped." });
+      }).catch((error) => {
+        setIntentStatus({ state: "error", error: message(error) });
+      });
+    };
+    handleIntent();
+    window.addEventListener("hashchange", handleIntent);
+    return () => window.removeEventListener("hashchange", handleIntent);
+  }, [labId]);
+
   // Re-detect the host when a job on this lab finishes (setup may have fixed a requirement)
   const runningCount = jobs.filter((j) => j.state === "running").length;
   useEffect(() => {
@@ -515,26 +549,36 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
   const simulator = labId === "ios" && lab?.provider === "native-macos" && lab.state === "ready";
   // The ready macOS Lab gets the floating app mirror for the windows on this Mac.
   const appMirror = labId === "macos" && lab?.provider === "native-macos" && lab.state === "ready";
+  // The Windows Apps Lab panel reads the desktop directly; it is mounted only locally on Windows hosts.
+  const showWinAppsPanel =
+    import.meta.env.PUBLIC_SITE_MODE !== "pages" && labId === "winapps";
   // Every tracked prerequisite is found: the card would only repeat success badges, so it yields
   // its half of the row to the actions. Anything missing keeps the full status list visible.
   const requirements = lab?.requirements ?? [];
-  const depsInstalled = requirements.length > 0 && requirements.every((r) => r.found);
+  const depsInstalled = requirements.every((r) => r.found);
 
   return (
     <AppShell activeId={`lab-${labId}`}>
       <div className="iux min-h-screen">
         <TopBar title={labId === "android" ? "Android Lab · Runtime & Setup" : label} back={{ href: labId === "android" ? "/android/" : "/", label: labId === "android" ? "Android Lab" : "This computer" }} icon={LAB_ICON[labId](20)} />
-        <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6">
+        <div className={simulator && simOpen ? "lg:flex lg:w-full lg:items-start" : undefined}>
+        <main className={`mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 ${simulator && simOpen ? "lg:mx-0 lg:min-w-0 lg:flex-1 lg:max-w-none" : ""}`}>
+          {intentStatus ? (
+            <p
+              role={intentStatus.state === "error" ? "alert" : "status"}
+              aria-live="polite"
+              className={`rounded-xl border border-(--iux-border) bg-(--iux-card) px-4 py-3 text-sm ${intentStatus.state === "error" ? "text-(--iux-danger)" : ""}`}
+            >
+              {intentStatus.state === "error" ? (
+                <><span>Could not stop macOS Lab control:</span> <span data-no-translate>{intentStatus.error}</span>. <span>Try again.</span></>
+              ) : intentStatus.message}
+            </p>
+          ) : null}
           {!lab ? (
             hostError ? <Empty>Could not reach the lab engine: {hostError}</Empty> : <Skeleton rows={5} />
           ) : (
             <>
-              <PageHead
-                icon={LAB_ICON[labId](22)}
-                title={label}
-                description={lab.summary}
-                actions={
-                  <>
+              <div className="flex flex-wrap items-center justify-end gap-2" aria-label="Lab status and tools">
                     {stateBadge(lab.state)}
                     {lab.provider ? <Badge>{lab.provider}</Badge> : null}
                     {simulator ? (
@@ -545,9 +589,7 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                     <IconButton label="Advanced settings" onClick={() => setAdvancedOpen(true)}>
                       <GearSixIcon size={14} />
                     </IconButton>
-                  </>
-                }
-              />
+              </div>
 
               {(lab.reasons.length > 0 || lab.notes.length > 0) && (
                 <div className="space-y-1.5 rounded-xl border border-dashed border-(--iux-border) p-4 text-sm">
@@ -564,6 +606,8 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                 </div>
               )}
 
+              {showWinAppsPanel ? <WinAppsPanel /> : null}
+
               {request ? (
                 <PlanPanel
                   title={`${actions.get(request.action)?.label ?? request.action} · ${label}`}
@@ -579,7 +623,6 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                 />
               ) : null}
 
-              {simulator ? <SimulatorDrawer open={simOpen} onClose={() => setSimOpen(false)} onPreview={(action, extra) => void preview(action, extra)} /> : null}
               {advancedOpen && lab ? (
                 <ConfigurationModal lab={labId} ready={lab.state === "ready"} onProfile={(p) => void preview("profile", { profile: p })} onClose={() => setAdvancedOpen(false)} />
               ) : null}
@@ -587,6 +630,7 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                 <MacAppPanel onPreview={(action, extra) => void preview(action, extra)} onHide={() => setMirrorHidden(true)} />
               ) : null}
               {appMirror && mirrorHidden ? <MacAppMirrorTeaser onOpen={() => setMirrorHidden(false)} /> : null}
+              {appMirror ? <MacEnginePanel /> : null}
 
               {lab.state === "unavailable" ? (
                 <Section title="Run it elsewhere" description={`On a supported host, these commands run from the os-lab checkout (${ref.where}).`}>
@@ -626,11 +670,12 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
 
                     <Section
                       className={depsInstalled ? "lg:col-span-2" : undefined}
+                      compact={simulator}
                       icon={<PlayIcon size={16} />}
                       title="Actions"
                       description="Each action is previewed before it runs."
                     >
-                      <div className="flex flex-col gap-4">
+                      <div className={`flex flex-col ${simulator ? "gap-3" : "gap-4"}`}>
                         {lab.state === "needs-setup" ? (
                           <p className="text-xs text-(--iux-muted-foreground)">
                             Start, stop and the other actions appear once the missing dependencies are installed.
@@ -645,6 +690,7 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                             </select>
                           </Field>
                         ) : null}
+                        <div className={simulator ? "grid gap-3 sm:grid-cols-2" : "flex flex-col gap-4"}>
                         {SEGMENT_GROUPS.map((group) => {
                           const items = group.ids
                             .filter((id) => !(simulator && (id === "start" || id === "stop")))
@@ -652,8 +698,8 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                             .filter(Boolean);
                           if (!items.length) return null;
                           return (
-                            <div key={group.title}>
-                              <p className="mb-2 text-xs font-medium text-(--iux-muted-foreground)">{group.title}</p>
+                            <div key={group.title} className={simulator ? "min-w-0 rounded-lg border border-(--iux-border) bg-(--iux-muted)/20 p-3" : undefined}>
+                              <p className={`${simulator ? "mb-1" : "mb-2"} text-xs font-medium text-(--iux-muted-foreground)`}>{group.title}</p>
                               {items.length === 1 ? (
                                 // A lone segment (e.g. restart while the simulator panel owns start/stop) keeps a labelled button.
                                 <button
@@ -677,6 +723,7 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                                       onClick={() => void preview(a!.id)}
                                     >
                                       {SEGMENT_ICON[a!.id] ?? <PlayIcon size={14} weight="fill" />}
+                                      {simulator ? (a!.id.endsWith("start") ? "Start" : a!.id.endsWith("stop") ? "Stop" : a!.label) : null}
                                       {a!.privileged ? <ShieldWarningIcon size={13} className="text-(--iux-warning)" /> : null}
                                     </button>
                                   ))}
@@ -689,8 +736,8 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                           const items = group.ids.map((id) => actions.get(id)).filter(Boolean);
                           if (!items.length) return null;
                           return (
-                            <div key={group.title}>
-                              <p className="mb-2 text-xs font-medium text-(--iux-muted-foreground)">{group.title}</p>
+                            <div key={group.title} className={simulator ? "min-w-0 rounded-lg border border-(--iux-border) bg-(--iux-muted)/20 p-3" : undefined}>
+                              <p className={`${simulator ? "mb-1" : "mb-2"} text-xs font-medium text-(--iux-muted-foreground)`}>{group.title}</p>
                               <div className="flex flex-wrap gap-2">
                                 {items.map((a) => (
                                   <button
@@ -709,6 +756,7 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                             </div>
                           );
                         })}
+                        </div>
                         {actions.has("resize") ? (
                           <form
                             className="flex flex-wrap items-end gap-2"
@@ -747,6 +795,7 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
                             </button>
                           </form>
                         ) : null}
+                        {simulator ? <IosDeviceCards selectedTarget={simTarget} onSelect={(target) => { setSimTarget(target); setSimOpen(true); }} /> : null}
                       </div>
                     </Section>
                   </div>
@@ -762,6 +811,8 @@ function LiveLabPage({ lab: labId }: { lab: LabId }) {
             </>
           )}
         </main>
+        {simulator ? <SimulatorDrawer open={simOpen} target={simTarget} onTargetChange={setSimTarget} onClose={() => setSimOpen(false)} onPreview={(action, extra) => void preview(action, extra)} /> : null}
+        </div>
       </div>
     </AppShell>
   );
