@@ -2187,7 +2187,7 @@ def plan(root: str, request: dict, host: dict | None = None) -> dict:
     if request.get("lab") == "source":
         import source_control
         return source_control.plan(root, request)
-  allowed = {"lab", "action", "profile", "cpus", "ram", "disk", "device", "wslDistro", "backup",
+    allowed = {"lab", "action", "profile", "cpus", "ram", "disk", "device", "wslDistro", "backup",
                "clickPid", "clickX", "clickY", "target", "glob",
                "inputKind", "inputText", "inputKey",
                "elementId", "elementKind", "elementSession", "elementBundle",
